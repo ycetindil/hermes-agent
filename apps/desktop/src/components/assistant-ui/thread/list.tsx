@@ -1678,7 +1678,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
           data-slot="aui_thread-content"
           ref={contentRef as React.RefCallback<HTMLDivElement>}
         >
-          {!renderEmpty && (hiddenCount > 0 || olderAvailable) && (
+          {!renderEmpty && (hiddenCount > 0 || olderAvailable || windowCommitRef.current === structuralSignature) && (
             <button
               className="mx-auto mb-(--conversation-turn-gap) rounded-full border border-border/65 bg-(--composer-fill) px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
               onClick={showEarlier}
