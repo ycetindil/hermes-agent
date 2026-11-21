@@ -977,17 +977,39 @@ def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
 
 
 @router.post("/api/providers/custom-endpoints/validate")
-async def validate_custom_endpoint(body: CustomEndpointUpdate):
+async def validate_custom_endpoint(body: CustomEndpointUpdate, profile: Optional[str] = None):
     """Probe a custom endpoint by calling its OpenAI-compatible /models URL."""
     base_url = (body.base_url or "").strip().rstrip("/")
     if not base_url:
         return {"ok": False, "reachable": True, "message": "Enter an endpoint URL first.", "models": []}
 
-    headers = {"Accept": "application/json"}
-    if body.api_key and body.api_key.strip():
-        headers["Authorization"] = f"Bearer {body.api_key.strip()}"
+    from hermes_cli.web_routers.endpoint_test_auth import probe_key
+    from agent.secret_scope import get_secret_str
 
-    resolved, resp = await _probe_openai_compatible_models(base_url, headers)
+    def resolve_key():
+        with _config_profile_scope(profile):
+            return probe_key(body, read_raw_config(), lambda name: get_secret_str(name, ""))
+
+    try:
+        key, borrowed = await asyncio.to_thread(resolve_key)
+    except ValueError as exc:
+        return {"ok": False, "reachable": True, "message": str(exc), "models": []}
+    except Exception:
+        return {"ok": False, "reachable": True, "message": "Could not resolve this profile's saved credential.", "models": []}
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    if borrowed:
+        # Never replay a saved credential to the alternate /v1 base path.
+        resolved, resp = base_url, None
+        try:
+            async with _endpoint_probe_client(base_url, 8.0) as client:
+                resp = await client.get(base_url + "/models", headers=headers)
+        except Exception:
+            pass
+    else:
+        resolved, resp = await _probe_openai_compatible_models(base_url, headers)
     if resp is None:
         return {"ok": False, "reachable": False, "message": f"Could not reach {base_url}/models.", "models": []}
     if resp.status_code in (401, 403):
@@ -1118,7 +1140,7 @@ def _endpoint_probe_client(url: str, timeout: float):
     page and the GUI reported "advertised no models" while the CLI saw the model (#63472)."""
     import httpx
     from agent.model_metadata import is_local_endpoint
-    return httpx.AsyncClient(timeout=httpx.Timeout(timeout), trust_env=not is_local_endpoint(url))
+    return httpx.AsyncClient(timeout=httpx.Timeout(timeout), trust_env=not is_local_endpoint(url), follow_redirects=False)
 
 
 @router.post("/api/providers/validate")
