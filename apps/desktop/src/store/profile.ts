@@ -30,7 +30,12 @@ import {
 } from '@/store/gateway'
 import { notifyError } from '@/store/notifications'
 import { notifyRemoteOverrideAuthFailure } from '@/store/profile-remote-override'
-import { dismissProfileSwitchFailure, invalidateProfileSwitch, trackProfileSwitch } from '@/store/profile-switch-state'
+import {
+  $profileSwitchPending,
+  dismissProfileSwitchFailure,
+  invalidateProfileSwitch,
+  trackProfileSwitch
+} from '@/store/profile-switch-state'
 import { exitProjectScope } from '@/store/project-scope'
 import {
   $connection,
@@ -416,6 +421,33 @@ function profilePickConnectionId(profile?: string): null | string {
 }
 
 /**
+ * The profile the user has explicitly selected for the next new chat, while
+ * that selection is still live — a rail pick while its gateway swap is in
+ * flight ($profileSwitchPending), or the pin once the gateway has adopted it
+ * ($newChatProfile == $activeGatewayProfile). A stale pin (a per-profile
+ * quick-create from a prior action, long since moved on from) is not a live
+ * selection: it names neither the pending pick nor the live gateway.
+ * Generic New Session gestures consult this instead of discarding the pin and
+ * re-applying the window's saved boot default, which used to land the chat on
+ * the default profile right after a profile switch (t_181c2e0c).
+ */
+export function liveNewChatSelection(): string | null {
+  const pending = $profileSwitchPending.get()
+
+  if (pending) {
+    return normalizeProfileKey(pending)
+  }
+
+  const pin = $newChatProfile.get()
+
+  if (pin && normalizeProfileKey(pin) === normalizeProfileKey($activeGatewayProfile.get())) {
+    return normalizeProfileKey(pin)
+  }
+
+  return null
+}
+
+/**
  * The EXACT owner route the next new chat is created on, or null for the
  * legacy ambient path. An explicit agent route ($newChatRoute) wins; else,
  * whenever a registry source is live, the (connection, profile) pair is
@@ -432,7 +464,14 @@ export function resolveNewChatOwnerRoute(forProfile?: string): AgentProfileRoute
     return explicit
   }
 
-  const intentProfile = forProfile ? normalizeProfileKey(forProfile) : $newChatProfile.get()
+  // A rail pick whose swap is still in flight is the next new chat's owner
+  // even when the pin was already dropped: the pin is the selection, the
+  // pending pick is its still-live trace, and the live gateway lags both
+  // (t_181c2e0c). A contradictory pin cannot coexist with a pending pick —
+  // every fresh pin captures a new intent, which invalidates the switch.
+  const intentProfile = forProfile
+    ? normalizeProfileKey(forProfile)
+    : ($newChatProfile.get() ?? $profileSwitchPending.get())
 
   if (intentProfile && isLegacyNewChatProfile(intentProfile)) {
     return null

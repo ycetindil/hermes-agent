@@ -84,6 +84,7 @@ import {
   $profileScope,
   type AgentProfileRoute,
   ALL_PROFILES,
+  liveNewChatSelection,
   messagingTotalsKey,
   normalizeProfileKey,
 } from '@/store/profile'
@@ -1607,7 +1608,13 @@ export function ChatSidebar({
                       // gateway is on (= the active switcher context). null →
                       // no swap. The switcher header is the single place to
                       // change which profile that is.
-                      if (isNewSession) {
+                      //
+                      // A live explicit selection (a rail pick still settling,
+                      // or the pin once the gateway adopted it) IS that
+                      // context: clearing the pin here would discard it and
+                      // the chat would land on the default profile instead
+                      // (t_181c2e0c). A stale pin is still cleared.
+                      if (isNewSession && !liveNewChatSelection()) {
                         $newChatProfile.set(null)
                       }
 
@@ -1632,7 +1639,13 @@ export function ChatSidebar({
                       }
 
                       startNewSessionDrag(placement => {
-                        $newChatProfile.set(null)
+                        // Same live-selection guard as the click above: a
+                        // dragged new session keeps a just-selected profile
+                        // (t_181c2e0c).
+                        if (!liveNewChatSelection()) {
+                          $newChatProfile.set(null)
+                        }
+
                         onNewSessionSplit(placement.dir, { anchor: placement.anchor, before: placement.before })
                       }, event)
                     }}

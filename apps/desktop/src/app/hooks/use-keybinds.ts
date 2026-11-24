@@ -56,6 +56,7 @@ import { toggleBrowserTab } from '@/store/preview'
 import {
   $newChatProfile,
   cycleProfile,
+  liveNewChatSelection,
   requestProfileCreate,
   switchProfileToSlot,
   switchToDefaultProfile,
@@ -319,9 +320,14 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
     'session.new': () => {
       // Match the sidebar New Session button. A plain keyboard new chat should
       // target the current live profile, not a stale per-profile quick-create
-      // selection from a prior action.
+      // selection from a prior action — but a live explicit selection (a rail
+      // pick still settling, or the pin once the gateway adopted it) is the
+      // current live profile, and clearing it would land the chat on the
+      // default profile instead (t_181c2e0c).
       setWorkspaceScope('sessions')
-      $newChatProfile.set(null)
+      if (!liveNewChatSelection()) {
+        $newChatProfile.set(null)
+      }
       deps.startFreshSession()
       window.dispatchEvent(new CustomEvent('hermes:new-session-shortcut'))
     },

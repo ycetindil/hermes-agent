@@ -8,6 +8,7 @@ import {
   normalizeProfileKey,
   resolveNewChatOwnerRoute
 } from '@/store/profile'
+import { $profileSwitchPending } from '@/store/profile-switch-state'
 import {
   $currentCwdExplicit,
   $currentFastMode,
@@ -115,10 +116,16 @@ export async function desktopSessionCreateParams(
     provider: isManualSelection ? picked.provider.trim() : ''
   }
 
+  // A rail pick whose swap is still in flight outranks the live gateway,
+  // which lags it: resolving to the live profile here would land the chat on
+  // the default profile right after a profile switch (t_181c2e0c). The pin
+  // still wins — a contradictory pin cannot coexist with a pending pick, since
+  // every fresh pin captures a new intent and invalidates the switch.
   const profile =
     capturedRoute?.profile ||
     requestedProfile ||
     $newChatProfile.get() ||
+    $profileSwitchPending.get() ||
     normalizeProfileKey($activeGatewayProfile.get())
 
   if (capturedRoute) {

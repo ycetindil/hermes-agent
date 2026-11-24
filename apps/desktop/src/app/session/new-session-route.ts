@@ -9,6 +9,7 @@ import {
   ensureGatewayAgent,
   ensureGatewayProfile,
   invalidateNewChatIntent,
+  liveNewChatSelection,
   pinLegacyNewChatProfile
 } from '@/store/profile'
 import { $projectScope, ALL_PROJECTS } from '@/store/project-scope'
@@ -32,7 +33,16 @@ export function defaultNewSessionTarget(): { profile: string; route: AgentProfil
   // seed here would undo a later device/profile selection. Only an explicit
   // "Open profile in new window" makes the peer's launch route a default.
   const profile = !isPeerInstanceWindow() || isProfilePinnedWindow() ? windowProfileOverride() : null
-  const saved = profile ? { connectionId: windowConnectionOverride(), profile } : $defaultProfileRoute.get()
+  // A live explicit selection (a rail pick still settling, or the pin once the
+  // gateway adopted it) is the profile this new chat belongs to; the window's
+  // saved boot default must not override it, or the chat lands on the default
+  // profile right after a profile switch (t_181c2e0c). An explicit window
+  // launch route above still wins: a window opened for one profile keeps it.
+  const saved = profile
+    ? { connectionId: windowConnectionOverride(), profile }
+    : liveNewChatSelection()
+      ? null
+      : $defaultProfileRoute.get()
 
   if (!saved) {
     return null
@@ -47,6 +57,14 @@ export function defaultNewSessionTarget(): { profile: string; route: AgentProfil
 }
 
 export function prepareDefaultNewSession(): void {
+  // A live explicit selection is the user's selected profile for the next new
+  // chat. A generic New Session must neither revoke it (invalidate) nor
+  // overwrite it with the window's saved boot default: both discard the
+  // selection and the chat lands on the default profile instead (t_181c2e0c).
+  if (liveNewChatSelection()) {
+    return
+  }
+
   invalidateNewChatIntent()
   const target = defaultNewSessionTarget()
 
