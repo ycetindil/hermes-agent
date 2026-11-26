@@ -315,6 +315,16 @@ function SidebarSessionRowImpl({
       onClick={event => event.stopPropagation()}
       onPointerDown={event => event.stopPropagation()}
     >
+      {/*
+        Contributed row actions (sessionRow.actions) render FIRST in the
+        cluster: the ⋯ button lifts out of flow and overlays the cluster's
+        right edge whenever trailing metadata is shown, so anything rendered
+        after the metadata can be covered just as the user reaches for it.
+        Actions sit left of the metadata, inside this same container-level
+        gesture gate, so a contributed button works with a plain onClick —
+        it neither resumes the row nor arms a session drag.
+      */}
+      <SessionRowSlot area={SESSION_ROW_AREAS.actions} sessionId={sessionPinId(session)} />
       {trailing.map(({ key, node }, index) => (
         <span
           className={

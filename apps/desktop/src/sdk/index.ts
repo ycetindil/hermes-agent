@@ -1869,7 +1869,9 @@ export { reasoningEffortLabel } from '@/lib/reasoning-effort'
 export { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 /** Row-decoration slots: register a `data` contribution with a `render` for
  *  `SESSION_ROW_AREAS.leading` / `.trailing` to decorate sidebar session rows
- *  (the props carry the row's stored session id). */
+ *  (the props carry the row's stored session id). `SESSION_ROW_AREAS.actions`
+ *  is the gesture-safe home for contributed row buttons: it renders inside
+ *  the row's actions cluster, so a button there needs no stopPropagation. */
 export { SESSION_ROW_AREAS, type SessionRowSlotContribution, type SessionRowSlotProps } from '@/lib/session-row-slots'
 /** A sibling WebSocket beside the route's `/api/ws` (voice PCM, Bot Screen RFB):
  *  same origin, same auth resolution as chat. */
