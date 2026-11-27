@@ -224,6 +224,12 @@ class TestEmailConnectClassification:
             raise email_adapter.imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED]")
 
         monkeypatch.setattr(email_adapter.imaplib, "IMAP4_SSL", _raise)
+        # Both legs are probed now: a real SMTP attempt against the fixture
+        # host must not escape the test — fail it fast here.
+        def _smtp_fail():
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(adapter, "_connect_smtp", _smtp_fail)
         ok = await adapter.connect()
 
         assert ok is False
@@ -231,6 +237,12 @@ class TestEmailConnectClassification:
         # IMAP4.error is the same type for bad creds and transient server
         # NOs, so a type-based terminal classification is not safe here.
         assert adapter.fatal_error_retryable is True
+        # Both legs were probed; both failed, so the combined verdict stays
+        # fatal with the receive leg's code (the old short-circuit behaviour).
+        assert adapter.legs["receive"]["ok"] is False
+        assert adapter.legs["receive"]["code"] == "email_imap_connect_error"
+        assert adapter.legs["send"]["ok"] is False
+        assert adapter.legs["send"]["code"] == "email_smtp_connect_error"
 
     @pytest.mark.asyncio
     async def test_smtp_auth_failure_is_terminal(self, monkeypatch):
@@ -252,6 +264,9 @@ class TestEmailConnectClassification:
         assert ok is False
         assert adapter.fatal_error_code == "email_auth_error"
         assert adapter.fatal_error_retryable is False
+        # Auth on either leg stays fatal even though the receive leg works.
+        assert adapter.legs["receive"]["ok"] is True
+        assert adapter.legs["send"]["code"] == "email_auth_error"
 
     @pytest.mark.asyncio
     async def test_smtp_transient_failure_stays_retryable(self, monkeypatch):
@@ -271,7 +286,144 @@ class TestEmailConnectClassification:
         assert ok is False
         assert adapter.fatal_error_code == "email_smtp_connect_error"
         assert adapter.fatal_error_retryable is True
+        # Receive works, send does not: the legs record the split even though
+        # the reconnect slot still carries the failing leg's code.
+        assert adapter.legs["receive"]["ok"] is True
+        assert adapter.legs["send"]["ok"] is False
+        assert adapter.legs["send"]["code"] == "email_smtp_connect_error"
 
+
+
+# ── Email: the two legs are probed independently ────────────────────────
+
+
+class TestEmailSplitLegs:
+    """IMAP (receive) and SMTP (send) are probed independently; one working leg
+    publishes ``partial``, never red ``fatal`` — the Proton case (no public
+    IMAP) sends fine but can never receive."""
+
+    def _make_adapter(self, monkeypatch):
+        for key, value in {
+            "EMAIL_ADDRESS": "bot@example.com",
+            "EMAIL_PASSWORD": "app-password",
+            "EMAIL_IMAP_HOST": "imap.example.com",
+            "EMAIL_SMTP_HOST": "smtp.example.com",
+        }.items():
+            monkeypatch.setenv(key, value)
+        from plugins.platforms.email.adapter import EmailAdapter
+
+        return EmailAdapter(PlatformConfig(enabled=True, token=""))
+
+    def _capture_status_writes(self, adapter, monkeypatch):
+        writes = []
+        monkeypatch.setattr(
+            adapter, "_write_runtime_status_safe",
+            lambda context, **kw: writes.append((context, kw)),
+        )
+        return writes
+
+    @pytest.mark.asyncio
+    async def test_imap_failure_still_probes_smtp_and_reports_partial(self, monkeypatch):
+        adapter = self._make_adapter(monkeypatch)
+        from plugins.platforms.email import adapter as email_adapter
+
+        writes = self._capture_status_writes(adapter, monkeypatch)
+
+        def _raise(*a, **k):
+            raise email_adapter.imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED]")
+
+        monkeypatch.setattr(email_adapter.imaplib, "IMAP4_SSL", _raise)
+        smtp = MagicMock()
+        monkeypatch.setattr(adapter, "_connect_smtp", lambda: smtp)
+        ok = await adapter.connect()
+
+        assert ok is False
+        # The SMTP probe ran despite the IMAP failure — that is the fix.
+        smtp.login.assert_called_once()
+        assert adapter.legs["receive"]["ok"] is False
+        assert adapter.legs["receive"]["code"] == "email_imap_connect_error"
+        assert adapter.legs["send"]["ok"] is True
+        # The reconnect slot still carries the failing leg's code...
+        assert adapter.fatal_error_code == "email_imap_connect_error"
+        assert adapter.fatal_error_retryable is True
+        # ...but the published state is partial, with the legs attached.
+        assert len(writes) == 1
+        context, kw = writes[0]
+        assert context == "partial"
+        assert kw["platform_state"] == "partial"
+        assert kw["error_code"] == "email_imap_connect_error"
+        assert kw["legs"] == adapter.legs
+
+    @pytest.mark.asyncio
+    async def test_smtp_failure_with_working_imap_reports_partial(self, monkeypatch):
+        adapter = self._make_adapter(monkeypatch)
+        from plugins.platforms.email import adapter as email_adapter
+
+        writes = self._capture_status_writes(adapter, monkeypatch)
+        imap = MagicMock()
+        imap.uid.return_value = ("OK", [b""])
+        monkeypatch.setattr(email_adapter.imaplib, "IMAP4_SSL", lambda *a, **k: imap)
+
+        def _smtp_fail():
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(adapter, "_connect_smtp", _smtp_fail)
+        ok = await adapter.connect()
+
+        assert ok is False
+        assert adapter.legs["receive"]["ok"] is True
+        assert adapter.legs["send"]["code"] == "email_smtp_connect_error"
+        assert len(writes) == 1
+        assert writes[0][1]["platform_state"] == "partial"
+        assert writes[0][1]["legs"] == adapter.legs
+
+    @pytest.mark.asyncio
+    async def test_both_legs_down_stays_fatal(self, monkeypatch):
+        adapter = self._make_adapter(monkeypatch)
+        from plugins.platforms.email import adapter as email_adapter
+
+        writes = self._capture_status_writes(adapter, monkeypatch)
+
+        def _raise(*a, **k):
+            raise email_adapter.imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED]")
+
+        monkeypatch.setattr(email_adapter.imaplib, "IMAP4_SSL", _raise)
+
+        def _smtp_fail():
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(adapter, "_connect_smtp", _smtp_fail)
+        ok = await adapter.connect()
+
+        assert ok is False
+        assert adapter.legs["receive"]["ok"] is False
+        assert adapter.legs["send"]["ok"] is False
+        assert adapter.fatal_error_code == "email_imap_connect_error"
+        assert len(writes) == 1
+        assert writes[0][1]["platform_state"] == "fatal"
+
+    def test_legs_outcome_table(self):
+        from plugins.platforms.email.adapter import _email_legs_outcome
+
+        ok = {"ok": True, "code": None, "message": None, "retryable": True}
+        imap_down = {"ok": False, "code": "email_imap_connect_error",
+                     "message": "IMAP connection failed", "retryable": True}
+        smtp_down = {"ok": False, "code": "email_smtp_connect_error",
+                     "message": "SMTP connection failed", "retryable": True}
+        smtp_auth = {"ok": False, "code": "email_auth_error",
+                     "message": "SMTP authentication failed", "retryable": False}
+
+        assert _email_legs_outcome(ok, ok)["connected"] is True
+        assert _email_legs_outcome(imap_down, ok)["platform_state"] == "partial"
+        assert _email_legs_outcome(ok, smtp_down)["platform_state"] == "partial"
+        both = _email_legs_outcome(imap_down, smtp_down)
+        assert both["platform_state"] == "fatal"
+        assert both["code"] == "email_imap_connect_error"
+        assert both["retryable"] is True
+        auth = _email_legs_outcome(ok, smtp_auth)
+        assert auth["platform_state"] == "fatal"
+        assert auth["code"] == "email_auth_error"
+        assert auth["retryable"] is False
 
 # ── Gateway: needs_attention escalation ────────────────────────────────
 
@@ -447,3 +599,69 @@ class TestRuntimeStatusAttentionFields:
         platform = payload["platforms"]["telegram"]
         assert platform["needs_attention"] is False
         assert platform["retrying_since"] is None
+
+# ── Status file: per-leg probe results round-trip ───────────────────────
+
+
+class TestRuntimeStatusLegsFields:
+    _LEGS = {
+        "receive": {"ok": False, "code": "email_imap_connect_error",
+                    "message": "IMAP connection to imap.protonmail.com:993 failed",
+                    "retryable": True},
+        "send": {"ok": True, "code": None, "message": None, "retryable": True},
+    }
+
+    def test_legs_persisted_on_partial_write(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from gateway import status as status_module
+
+        status_module.write_runtime_status(
+            platform="email",
+            platform_state="partial",
+            error_code="email_imap_connect_error",
+            error_message="Sending works; receiving does not.",
+            legs=self._LEGS,
+        )
+        payload = status_module.read_runtime_status()
+        assert payload["platforms"]["email"]["legs"] == self._LEGS
+
+        # A later write that does not mention legs keeps them (merge semantics:
+        # the runner's reconnect writes never carry legs).
+        status_module.write_runtime_status(
+            platform="email", platform_state="retrying",
+            error_code="email_imap_connect_error",
+            error_message="Sending works; receiving does not.",
+        )
+        payload = status_module.read_runtime_status()
+        assert payload["platforms"]["email"]["legs"] == self._LEGS
+        assert payload["platforms"]["email"]["state"] == "retrying"
+
+    def test_malformed_legs_dropped_not_fatal(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from gateway import status as status_module
+
+        status_module.write_runtime_status(
+            platform="email", platform_state="partial",
+            error_code="email_imap_connect_error", error_message="boom",
+            legs={"send": {"ok": True}},  # missing the receive leg
+        )
+        payload = status_module.read_runtime_status()
+        assert payload["platforms"]["email"]["legs"] is None
+        assert payload["platforms"]["email"]["state"] == "partial"
+
+    def test_connected_write_clears_legs(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from gateway import status as status_module
+
+        status_module.write_runtime_status(
+            platform="email", platform_state="partial",
+            error_code="email_imap_connect_error", error_message="boom",
+            legs=self._LEGS,
+        )
+        status_module.write_runtime_status(
+            platform="email", platform_state="connected",
+            error_code=None, error_message=None, legs=None,
+        )
+        payload = status_module.read_runtime_status()
+        assert payload["platforms"]["email"]["legs"] is None
+        assert payload["platforms"]["email"]["state"] == "connected"

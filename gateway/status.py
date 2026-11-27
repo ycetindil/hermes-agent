@@ -1075,13 +1075,41 @@ def _coerce_session_store(session_store: Any) -> dict[str, str]:
     return {"status": state if state in {"ok", "unavailable", "retrying"} else "unknown"}
 
 
+def _coerce_legs(legs: Any) -> Optional[dict[str, Any]]:
+    """Normalize an adapter's per-leg probe results, or ``None`` when malformed.
+
+    Shape: ``{"send": {"ok", "code", "message", "retryable"},
+    "receive": {...}}``. A malformed value is dropped, never allowed to break
+    the status writer — the platform keeps its state/error, just no legs.
+    """
+    if legs is None:
+        return None
+    if not isinstance(legs, dict):
+        return None
+    normalized: dict[str, Any] = {}
+    for name in ("send", "receive"):
+        leg = legs.get(name)
+        if not isinstance(leg, dict) or not isinstance(leg.get("ok"), bool):
+            return None
+        code, message = leg.get("code"), leg.get("message")
+        if code is not None and not isinstance(code, str):
+            return None
+        if message is not None and not isinstance(message, str):
+            return None
+        retryable = leg.get("retryable", True)
+        if not isinstance(retryable, bool):
+            return None
+        normalized[name] = {"ok": leg["ok"], "code": code, "message": message, "retryable": retryable}
+    return normalized
+
+
 def _prepare_runtime_status_update(
     *, gateway_state: Any = _UNSET, exit_reason: Any = _UNSET, restart_requested: Any = _UNSET,
     active_agents: Any = _UNSET, active_work: Any = _UNSET, platform: Any = _UNSET, platform_state: Any = _UNSET,
     error_code: Any = _UNSET, error_message: Any = _UNSET, needs_attention: Any = _UNSET,
     retrying_since: Any = _UNSET, served_profiles: Any = _UNSET, session_store: Any = _UNSET,
     parked_profiles: Any = _UNSET, multiplex_standalone_reason: Any = _UNSET,
-    platform_metrics: Any = _UNSET,
+    platform_metrics: Any = _UNSET, legs: Any = _UNSET,
     ingress_url: Any = _UNSET, listener_base: Any = _UNSET, clear_profile_platforms: bool = False,
     drop_profile_platforms: Optional[str] = None, keep_platforms: Iterable[str] = (),
     load_existing: bool = True, reload_existing: bool = False,
@@ -1136,6 +1164,7 @@ def _prepare_runtime_status_update(
                 ("needs_attention", needs_attention, bool),
                 ("retrying_since", retrying_since, None),
                 ("metrics", platform_metrics, None),
+                ("legs", legs, _coerce_legs),
                 ("ingress_url", ingress_url, None),
                 ("listener_base", listener_base, None),
             ))

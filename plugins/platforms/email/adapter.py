@@ -460,6 +460,34 @@ def _attach_file(msg: MIMEMultipart, path: Path, filename: str) -> None:
         msg.attach(part)
 
 
+def _email_legs_outcome(receive: dict[str, Any], send: dict[str, Any]) -> dict[str, Any]:
+    """Decide ``connect()`` from independently probed legs.
+
+    Returns ``{"connected", "code", "message", "retryable", "platform_state"}``.
+    Both legs ok → connected. Exactly one leg ok and the failing leg retryable →
+    ``partial`` (a non-red state: the channel still does half its job, e.g. a
+    provider with no public IMAP can send but never receive). An auth failure on
+    either leg, or both legs down, stays ``fatal`` — "bad" is reserved for those.
+    """
+    if receive["ok"] and send["ok"]:
+        return {"connected": True, "code": None, "message": None,
+                "retryable": True, "platform_state": "connected"}
+    failing = [leg for leg in (receive, send) if not leg["ok"]]
+    non_retryable = [leg for leg in failing if not leg["retryable"]]
+    if non_retryable:
+        leg = non_retryable[0]
+        return {"connected": False, "code": leg["code"], "message": leg["message"],
+                "retryable": False, "platform_state": "fatal"}
+    if len(failing) == 1:
+        leg = failing[0]
+        return {"connected": False, "code": leg["code"], "message": leg["message"],
+                "retryable": True, "platform_state": "partial"}
+    # Both down: keep the receive leg's verdict, as connect() did when it
+    # short-circuited on IMAP and never probed SMTP.
+    return {"connected": False, "code": receive["code"], "message": receive["message"],
+            "retryable": True, "platform_state": "fatal"}
+
+
 class EmailAdapter(BasePlatformAdapter):
     """Email gateway adapter using IMAP (receive) and SMTP (send)."""
     serial_receive_loop = True  # the IMAP poll loop awaits each message before dispatching the next
@@ -571,8 +599,11 @@ class EmailAdapter(BasePlatformAdapter):
         self._set_fatal_error(code, detail, retryable=retryable)
         return False
 
-    def _probe_imap(self, is_reconnect: bool) -> bool:
-        """Connection test + seen-UID baseline. Sets a fatal error and returns False on failure."""
+    def _probe_imap(self, is_reconnect: bool) -> dict[str, Any]:
+        """Connection test + seen-UID baseline. Returns a leg result
+        (``{"ok", "code", "message", "retryable"}``); records nothing fatal —
+        ``connect()`` probes both legs first and decides once, so an IMAP
+        failure no longer hides whether SMTP works."""
         try:
             with self._inbox() as imap:
                 snapshot = self._seen_uids_snapshot.get(self._address)
@@ -588,16 +619,18 @@ class EmailAdapter(BasePlatformAdapter):
                 self._trim_seen_uids()
                 logger.info(passed, len(self._seen_uids))
             self._seen_uids_snapshot[self._address] = set(self._seen_uids)
-            return True
+            return {"ok": True, "code": None, "message": None, "retryable": True}
         except Exception as e:
-            # Always set an explicit fatal code, else the gateway treats every failure as transient with zero
+            # Always carry an explicit code, else the gateway treats every failure as transient with zero
             # owner signal. retryable=True because imaplib raises the same generic IMAP4.error for bad credentials
             # AND transient NOs (Gmail "too many simultaneous connections"); loops surface via NEEDS_ATTENTION.
-            return self._fail("[Email] IMAP connection failed: %s", e, "email_imap_connect_error",
-                              f"IMAP connection to {self._imap_host}:{self._imap_port} failed: {e}", retryable=True)
+            logger.error("[Email] IMAP connection failed: %s", e)
+            return {"ok": False, "code": "email_imap_connect_error",
+                    "message": f"IMAP connection to {self._imap_host}:{self._imap_port} failed: {e}",
+                    "retryable": True}
 
-    def _probe_smtp(self) -> bool:
-        """SMTP connect + login test. Sets a fatal error and returns False on failure."""
+    def _probe_smtp(self) -> dict[str, Any]:
+        """SMTP connect + login test. Returns a leg result; records nothing fatal."""
         try:
             smtp = self._connect_smtp()
             try:
@@ -605,15 +638,19 @@ class EmailAdapter(BasePlatformAdapter):
             finally:
                 smtp.quit()
             logger.info("[Email] SMTP connection test passed.")
-            return True
+            return {"ok": True, "code": None, "message": None, "retryable": True}
         except smtplib.SMTPAuthenticationError as e:
             # Typed auth failure (535 & friends) can never self-heal, so drop out of the reconnect queue — unambiguous, unlike IMAP4.error.
-            return self._fail("[Email] SMTP authentication failed: %s", e, "email_auth_error",
-                              f"SMTP authentication failed for {self._address}: {e}. Check EMAIL_PASSWORD (for Gmail/Outlook "
-                              "this must be an app password, not the account password).", retryable=False)
+            logger.error("[Email] SMTP authentication failed: %s", e)
+            return {"ok": False, "code": "email_auth_error",
+                    "message": f"SMTP authentication failed for {self._address}: {e}. Check EMAIL_PASSWORD (for Gmail/Outlook "
+                               "this must be an app password, not the account password).",
+                    "retryable": False}
         except Exception as e:
-            return self._fail("[Email] SMTP connection failed: %s", e, "email_smtp_connect_error",
-                              f"SMTP connection to {self._smtp_host} failed: {e}", retryable=True)
+            logger.error("[Email] SMTP connection failed: %s", e)
+            return {"ok": False, "code": "email_smtp_connect_error",
+                    "message": f"SMTP connection to {self._smtp_host} failed: {e}",
+                    "retryable": True}
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to the IMAP server and start polling for new messages."""
@@ -623,16 +660,32 @@ class EmailAdapter(BasePlatformAdapter):
             message = f"Not configured — missing {', '.join(missing)}. Set it via `hermes gateway setup` (env) or platforms.email in config.yaml."
             # Non-retryable: a blank-but-present env var used to drive an indefinite retry loop that leaked until OOM.
             return self._fail("[Email] %s", message, "email_missing_configuration", message, retryable=False)
-        if not self._probe_imap(is_reconnect) or not self._probe_smtp():
-            return False
-        if self._require_authenticated_sender and not self._authserv_id and self._address not in EmailAdapter._missing_pin_warned:
-            EmailAdapter._missing_pin_warned.add(self._address)
-            logger.warning("[Email] %s: %s.%s", self._address, _MISSING_AUTHSERV_REASON, _MISSING_AUTHSERV_HINT)
-        self._running = True
-        self._poll_task = asyncio.create_task(self._poll_loop())
-        print(f"[Email] Connected as {self._address}")
-        self._wire_plugin_handlers(None)  # plugin-registered native handlers
-        return True
+        # Probe BOTH legs: the old short-circuit (`_probe_imap or _probe_smtp`)
+        # never tested SMTP when IMAP failed, so the adapter could not report
+        # "send works, receive does not" (e.g. a provider with no public IMAP).
+        receive = self._probe_imap(is_reconnect)
+        send = self._probe_smtp()
+        legs = {"receive": receive, "send": send}
+        outcome = _email_legs_outcome(receive, send)
+        if outcome["connected"]:
+            self._legs = None
+            if self._require_authenticated_sender and not self._authserv_id and self._address not in EmailAdapter._missing_pin_warned:
+                EmailAdapter._missing_pin_warned.add(self._address)
+                logger.warning("[Email] %s: %s.%s", self._address, _MISSING_AUTHSERV_REASON, _MISSING_AUTHSERV_HINT)
+            self._running = True
+            self._poll_task = asyncio.create_task(self._poll_loop())
+            print(f"[Email] Connected as {self._address}")
+            self._wire_plugin_handlers(None)  # plugin-registered native handlers
+            return True
+        # The fatal slot stays the reconnect machinery's input (code/message/
+        # retryable), while the published platform_state is derived from the
+        # legs: one working leg is "partial" (warn), never red "fatal". The
+        # channel stays enabled; sending keeps working whenever the SMTP leg
+        # is the one that passed. Never re-disable the adapter here.
+        self._set_fatal_error(
+            outcome["code"], outcome["message"], retryable=outcome["retryable"],
+            legs=legs, platform_state=outcome["platform_state"])
+        return False
 
     async def disconnect(self) -> None:
         """Stop polling and disconnect."""

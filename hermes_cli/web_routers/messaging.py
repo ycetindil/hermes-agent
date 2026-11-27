@@ -220,6 +220,46 @@ def _relay_disabled_platform_ids(scoped: bool) -> frozenset[str]:
         return frozenset()
 
 
+# Auth failures can never self-heal: a leg that failed auth keeps the channel
+# "fatal" even when the other leg works — "bad" is reserved for both-legs-down
+# or an auth failure.
+_EMAIL_AUTH_ERROR_CODES = frozenset({"email_auth_error"})
+
+# Providers known to offer no public IMAP: an IMAP failure naming one of these
+# hosts means the provider, not the network. (Proton is the live case.)
+_NO_PUBLIC_IMAP_HOST_MARKERS = ("proton",)
+
+
+def _leg_reason_sentence(leg: dict[str, Any]) -> str:
+    """Plain-words reason a leg is unavailable. Unknown codes fall back to the
+    leg's own message, never a bare code."""
+    code = leg.get("code") or ""
+    message = leg.get("message") or ""
+    if code == "email_imap_connect_error" and any(
+        marker in message.lower() for marker in _NO_PUBLIC_IMAP_HOST_MARKERS
+    ):
+        return "the provider offers no public IMAP"
+    return message or "could not connect"
+
+
+def _legs_plain_words(legs: dict[str, Any]) -> Optional[str]:
+    """One plain-words sentence for a split channel, or None when the legs are
+    not split (both up, both down, or an auth failure on either leg)."""
+    send, receive = legs.get("send"), legs.get("receive")
+    if not (isinstance(send, dict) and isinstance(receive, dict)):
+        return None
+    if not (isinstance(send.get("ok"), bool) and isinstance(receive.get("ok"), bool)):
+        return None
+    if send["ok"] == receive["ok"]:
+        return None
+    failing = send if not send["ok"] else receive
+    if failing.get("code") in _EMAIL_AUTH_ERROR_CODES or failing.get("retryable") is False:
+        return None
+    send_part = "Sending — works" if send["ok"] else f"Sending — unavailable: {_leg_reason_sentence(send)}"
+    receive_part = "Receiving — works" if receive["ok"] else f"Receiving — unavailable: {_leg_reason_sentence(receive)}"
+    return f"{send_part} / {receive_part}"
+
+
 def _messaging_platform_payload(
     entry: dict[str, Any], env_on_disk: dict[str, str], runtime: dict | None,
     scoped: bool = False, profile_home: Optional[Path] = None, source_keys: Collection[str] = (),
@@ -291,11 +331,33 @@ def _messaging_platform_payload(
         error_code = error_code or "startup_failed"
         error_message = error_message or rt.get("exit_reason")
 
+    # Per-leg probe results: only a DOWN platform wears them — a stale legs
+    # value under "connected" (the runner's connected write does not clear
+    # them) must never re-derive a failure for a healthy channel.
+    legs = runtime_platform.get("legs") if gateway_running else None
+    if not (isinstance(legs, dict) and state in ("fatal", "retrying")):
+        legs = None
+    if legs is not None:
+        plain_words = _legs_plain_words(legs)
+        if plain_words is not None:
+            # One working leg is "partial": the shared tone map renders any
+            # state it does not know as warn, never red. The stored single
+            # "fatal" stays in the record; the API's state follows the legs.
+            state = "partial"
+            error_message = plain_words
+            if error_code is None:
+                failing_leg = next(
+                    (leg for leg in (legs.get("send"), legs.get("receive"))
+                     if isinstance(leg, dict) and leg.get("ok") is False),
+                    None,
+                )
+                error_code = failing_leg.get("code") if isinstance(failing_leg, dict) else None
+
     payload = {
         "id": platform_id, "name": entry["name"], "description": entry["description"],
         "docs_url": entry["docs_url"], "enabled": enabled, "configured": configured,
         "gateway_running": gateway_running, "state": state, "error_code": error_code,
-        "error_message": error_message, "updated_at": runtime_platform.get("updated_at"),
+        "error_message": error_message, "legs": legs, "updated_at": runtime_platform.get("updated_at"),
         "home_channel": home_channel, "env_vars": env_vars,
         "disabled_by_relay": not enabled and platform_id in relay_disabled,
         # Team Gateway's shared bot carries this platform: setup is linking an account to it, and a

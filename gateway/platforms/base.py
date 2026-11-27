@@ -1840,6 +1840,11 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
         self._fatal_error_code: Optional[str] = None
         self._fatal_error_message: Optional[str] = None
         self._fatal_error_handler: Optional[Callable[[BasePlatformAdapter], Awaitable[None] | None]] = None
+        # Per-leg probe results (e.g. email's ``{"receive": {...}, "send": {...}}``):
+        # published alongside the fatal slot so readers can tell a half-working
+        # channel ("send works, receive does not") from a dead one. None when
+        # the legs were never probed or the adapter is connected.
+        self._legs: Optional[dict[str, Any]] = None
         # Strong refs to shielded fatal-error handler tasks that outlive their carrier task
         # (asyncio keeps only weak refs); without them the loop can GC the detached handler
         # mid-flight — the "handler killed mid-flight" class (#81335).
@@ -2005,6 +2010,7 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
     fatal_error_message = property(lambda self: self._fatal_error_message)
     fatal_error_code = property(lambda self: self._fatal_error_code)
     fatal_error_retryable = property(lambda self: self._fatal_error_retryable)
+    legs = property(lambda self: self._legs)
 
     def _should_auto_tts_for_chat(self, chat_id: str) -> bool:
         """Explicit /voice on|tts wins over off, then fall back to voice.auto_tts (#16007)."""
@@ -2036,12 +2042,13 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
         self._running = True
         self._fatal_error_code = self._fatal_error_message = None
         self._fatal_error_retryable = True
+        self._legs = None
         if self.send_path_degraded:
             self._mark_degraded()
         else:
             extra = {"listener_base": listener_base} if listener_base else {}
             self._write_runtime_status_safe(
-                "connected", platform_state="connected", error_code=None, error_message=None, **extra)
+                "connected", platform_state="connected", error_code=None, error_message=None, legs=None, **extra)
 
     def _mark_degraded(self) -> None:
         """Publish ``retrying`` for a running adapter whose delivery path is unproven."""
@@ -2050,6 +2057,7 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
             platform_state="retrying",
             error_code=None,
             error_message=self.DEGRADED_STATUS_MESSAGE,
+            legs=None,
         )
 
     def _mark_disconnected(self) -> None:
@@ -2058,11 +2066,25 @@ class BasePlatformAdapter(_SessionModelSettingsMixin, ABC):
             self._write_runtime_status_safe(
                 "disconnected", platform_state="disconnected", error_code=None, error_message=None)
 
-    def _set_fatal_error(self, code: str, message: str, *, retryable: bool) -> None:
+    def _set_fatal_error(self, code: str, message: str, *, retryable: bool,
+                         legs: Optional[dict[str, Any]] = None,
+                         platform_state: str = "fatal") -> None:
+        """Record a fatal error for the gateway's reconnect machinery.
+
+        The fatal slot (code/message/retryable) stays the reconnect input, but
+        the *published* platform state is derived: pass ``legs`` plus a
+        non-``"fatal"`` ``platform_state`` (e.g. ``"partial"`` when an adapter
+        probed its legs independently and exactly one works) so a half-working
+        channel never renders as red "fatal" for the whole channel. Callers
+        that pass nothing keep the old single-slot behaviour.
+        """
         self._running = False
         self._fatal_error_code, self._fatal_error_message = code, message
         self._fatal_error_retryable = retryable
-        self._write_runtime_status_safe("fatal", platform_state="fatal", error_code=code, error_message=message)
+        self._legs = legs
+        self._write_runtime_status_safe(
+            platform_state, platform_state=platform_state, error_code=code,
+            error_message=message, legs=legs)
 
     def _write_runtime_status_safe(self, context: str, **kwargs) -> None:
         """Publish runtime status; log preparation failures without disrupting the adapter."""
