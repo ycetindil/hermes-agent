@@ -2221,6 +2221,17 @@ export const jaOverrides = {
     results: '結果',
     pinned: 'ピン留め',
     sessions: 'セッション',
+    recents: '最近のセッション',
+    openNow: {
+      label: '開いているセッション',
+      scope: profile => `${profile} プロファイルの開いている作業`,
+      window: minutes => `過去${minutes}分間にアクティブ`,
+      boardWork: 'ボード作業 · 実行中',
+      session: state => `セッション · ${state}`,
+      unavailable: 'クォータビューはライブリストをまだ共有していません。',
+      stale: time => `${time} 時点のリストを表示しています — ライブリストは更新されていません。`,
+      empty: '現在開いているものはありません'
+    },
     terminal: 'ターミナル',
     files: 'ファイル',
     review: 'レビュー',

@@ -205,6 +205,17 @@ export const arChrome = {
     results: 'النتائج',
     pinned: 'المثبتة',
     sessions: 'الجلسات',
+    recents: 'الجلسات الأخيرة',
+    openNow: {
+      label: 'مفتوح الآن',
+      scope: profile => `عرض العمل المفتوح للملف الشخصي ${profile}`,
+      window: minutes => `نشط خلال آخر ${minutes} دقائق`,
+      boardWork: 'عمل اللوحة · قيد التنفيذ',
+      session: state => `جلسة · ${state}`,
+      unavailable: 'لم تشارك عرض الحصة قائمتها المباشرة بعد.',
+      stale: time => `عرض قائمة ${time} — لم يتم تحديث القائمة المباشرة.`,
+      empty: 'لا يوجد شيء مفتوح الآن'
+    },
     terminal: 'الطرفية',
     files: 'الملفات',
     review: 'المراجعة',

@@ -96,6 +96,17 @@ export const zhHantChrome = {
     results: '結果',
     pinned: '已釘選',
     sessions: '工作階段',
+    recents: '最近的工作階段',
+    openNow: {
+      label: '目前開啟',
+      scope: profile => `正在顯示 ${profile} 設定檔的開啟工作`,
+      window: minutes => `過去 ${minutes} 分鐘內有活動`,
+      boardWork: '看板工作 · 執行中',
+      session: state => `工作階段 · ${state}`,
+      unavailable: '配額檢視尚未分享即時清單。',
+      stale: time => `顯示 ${time} 的清單 — 即時清單尚未更新。`,
+      empty: '目前沒有開啟的內容'
+    },
     terminal: '終端機',
     files: '檔案',
     review: '審查',

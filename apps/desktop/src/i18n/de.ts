@@ -3677,6 +3677,17 @@ export const deOverrides = {
     results: 'Ergebnisse',
     pinned: 'Angepinnt',
     sessions: 'Sessions',
+    recents: 'Letzte Sitzungen',
+    openNow: {
+      label: 'Jetzt offen',
+      scope: profile => `Offene Arbeit des Profils ${profile}`,
+      window: minutes => `Aktiv in den letzten ${minutes} Minuten`,
+      boardWork: 'Board-Arbeit · läuft',
+      session: state => `Sitzung · ${state}`,
+      unavailable: 'Die Quota-Ansicht hat ihre Live-Liste noch nicht geteilt.',
+      stale: time => `Liste von ${time} — die Live-Liste wurde nicht aktualisiert.`,
+      empty: 'Gerade nichts offen'
+    },
     terminal: 'Terminal',
     files: 'Dateien',
     review: 'Review',

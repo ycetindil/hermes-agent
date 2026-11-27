@@ -250,3 +250,71 @@ describe('host.state busy vs gateway', () => {
     expect(host.state.gateway.get()).toBe('open')
   })
 })
+
+describe('host.publishMonitorLive', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.resetModules()
+  })
+
+  afterEach(async () => {
+    const monitor = await import('@/store/monitor-live')
+    monitor.clearMonitorLive()
+    vi.resetModules()
+  })
+
+  async function setup() {
+    const { host } = await import('@/sdk/index')
+
+    return { host }
+  }
+
+  const snapshotPayload = {
+    profile: 'default',
+    live: {
+      now: 1_780_000_000,
+      running: [
+        {
+          id: 'sess-one',
+          profile: 'default',
+          title: 'Alpha chat',
+          model: null,
+          state: 'working',
+          status: 'running',
+          subagent: false,
+          origin: 'desktop',
+          kind: 'hermes',
+          source_name: 'Hermes',
+          card_only: false,
+          kanban: null,
+          last: 1_780_000_000
+        }
+      ],
+      counts: { open: 1, working: 1, needs_approval: 0, your_turn: 0, stalled: 0, subagents: 0 }
+    },
+    fetchedAt: 1_780_000_000
+  }
+
+  it('exposes the published snapshot through host.state.monitorLive', async () => {
+    const { host } = await setup()
+
+    expect(host.state.monitorLive.get()).toBeNull()
+    expect(host.publishMonitorLive(snapshotPayload)).toBe(true)
+
+    const snapshot = host.state.monitorLive.get()
+    expect(snapshot?.profile).toBe('default')
+    expect(snapshot?.live.counts.open).toBe(1)
+    expect(snapshot?.live.running[0]?.title).toBe('Alpha chat')
+    expect(snapshot?.fetchedAt).toBe(1_780_000_000)
+  })
+
+  it('rejects a malformed publish and keeps the previous snapshot', async () => {
+    const { host } = await setup()
+
+    expect(host.publishMonitorLive(snapshotPayload)).toBe(true)
+    expect(host.publishMonitorLive({ profile: 'default' })).toBe(false)
+    expect(host.publishMonitorLive(null)).toBe(false)
+
+    expect(host.state.monitorLive.get()?.live.running[0]?.title).toBe('Alpha chat')
+  })
+})

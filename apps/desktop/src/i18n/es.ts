@@ -3666,6 +3666,17 @@ export const esOverrides = {
     results: 'Resultados',
     pinned: 'Fijadas',
     sessions: 'Sesiones',
+    recents: 'Sesiones recientes',
+    openNow: {
+      label: 'Abiertas ahora',
+      scope: profile => `Mostrando el trabajo abierto del perfil ${profile}`,
+      window: minutes => `Activo en los últimos ${minutes} minutos`,
+      boardWork: 'Trabajo del tablero · en curso',
+      session: state => `Sesión · ${state}`,
+      unavailable: 'La vista de cuota aún no ha compartido su lista en vivo.',
+      stale: time => `Mostrando la lista de las ${time}: la lista en vivo no se ha actualizado.`,
+      empty: 'Nada abierto ahora mismo'
+    },
     terminal: 'Terminal',
     files: 'Archivos',
     review: 'Revisión',

@@ -2838,6 +2838,17 @@ export interface Translations extends NoticeTranslations {
     results: string
     pinned: string
     sessions: string
+    recents: string
+    openNow: {
+      label: string
+      scope: (profile: string) => string
+      window: (minutes: number) => string
+      boardWork: string
+      session: (state: string) => string
+      unavailable: string
+      stale: (time: string) => string
+      empty: string
+    }
     terminal: string
     files: string
     review: string

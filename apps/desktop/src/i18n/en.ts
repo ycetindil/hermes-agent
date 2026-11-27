@@ -3237,6 +3237,17 @@ export const en: Translations = {
     results: 'Results',
     pinned: 'Pinned',
     sessions: 'Sessions',
+    recents: 'Recent sessions',
+    openNow: {
+      label: 'Open now',
+      scope: profile => `Showing the ${profile} profile's open work`,
+      window: minutes => `Active in the last ${minutes} minutes`,
+      boardWork: 'Board work · running',
+      session: state => `Session · ${state}`,
+      unavailable: "The quota view hasn't shared its live list yet.",
+      stale: time => `Showing ${time}'s list — the live list hasn't updated.`,
+      empty: 'Nothing open right now'
+    },
     terminal: 'Terminal',
     files: 'Files',
     review: 'Review',

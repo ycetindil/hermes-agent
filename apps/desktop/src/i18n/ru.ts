@@ -2478,6 +2478,17 @@ export const ruOverrides = {
     results: 'Результаты',
     pinned: 'Закреплённые',
     sessions: 'Сеансы',
+    recents: 'Недавние сессии',
+    openNow: {
+      label: 'Открыто сейчас',
+      scope: profile => `Открытая работа профиля «${profile}»`,
+      window: minutes => `Активность за последние ${minutes} минут`,
+      boardWork: 'Работа доски · выполняется',
+      session: state => `Сессия · ${state}`,
+      unavailable: 'Представление квот пока не поделилось живым списком.',
+      stale: time => `Показан список на ${time} — живой список не обновился.`,
+      empty: 'Сейчас ничего не открыто'
+    },
     terminal: 'Терминал',
     files: 'Файлы',
     review: 'Проверка',

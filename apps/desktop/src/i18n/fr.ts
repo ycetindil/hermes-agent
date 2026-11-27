@@ -3685,6 +3685,17 @@ export const frOverrides = {
     results: 'Résultats',
     pinned: 'Épinglées',
     sessions: 'Sessions',
+    recents: 'Sessions récentes',
+    openNow: {
+      label: 'Ouvertes',
+      scope: profile => `Travail ouvert du profil ${profile}`,
+      window: minutes => `Actif dans les ${minutes} dernières minutes`,
+      boardWork: 'Travail du tableau · en cours',
+      session: state => `Session · ${state}`,
+      unavailable: "La vue des quotas n'a pas encore partagé sa liste en direct.",
+      stale: time => `Liste de ${time} — la liste en direct n'a pas été mise à jour.`,
+      empty: "Rien d'ouvert pour le moment"
+    },
     terminal: 'Terminal',
     files: 'Fichiers',
     review: 'Revue',

@@ -3140,6 +3140,17 @@ export const zhOverrides = {
     results: '结果',
     pinned: '已置顶',
     sessions: '会话',
+    recents: '最近会话',
+    openNow: {
+      label: '当前打开',
+      scope: profile => `正在显示 ${profile} 配置文件的打开工作`,
+      window: minutes => `过去 ${minutes} 分钟内活跃`,
+      boardWork: '看板工作 · 运行中',
+      session: state => `会话 · ${state}`,
+      unavailable: '配额视图尚未共享其实时列表。',
+      stale: time => `显示 ${time} 的列表 — 实时列表尚未更新。`,
+      empty: '当前没有打开的内容'
+    },
     terminal: '终端',
     files: '文件',
     review: '审查',

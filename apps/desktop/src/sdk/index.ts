@@ -59,6 +59,7 @@ import {
   retainGatewayForRelay,
   retireLocalProfileGateways
 } from '@/store/gateway'
+import { $monitorLive, type MonitorLiveSnapshot, publishMonitorLive } from '@/store/monitor-live'
 import { notify, notifyError } from '@/store/notifications'
 import {
   $activeGatewayProfile,
@@ -599,6 +600,14 @@ export const host = {
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
+    /**
+     * Last monitor snapshot the quota plugin published (`snapshot.live` +
+     * its scope profile), or null before the first publish. The sidebar's
+     * Open-now section reads this — the same snapshot the Live tab renders,
+     * so the two agree by construction. Published through
+     * `host.publishMonitorLive`; a plugin only ever reads this atom.
+     */
+    monitorLive: readonlyAtom<null | MonitorLiveSnapshot>($monitorLive),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
     /** Window geometry ({ width, height, narrow }). */
@@ -611,6 +620,16 @@ export const host = {
   /** Toast into the app's notification stack. */
   notify,
   notifyError,
+
+  /**
+   * Publish the monitor snapshot's `live` section for the sidebar's Open-now
+   * section. The quota plugin calls this on every snapshot poll with
+   * `{ profile, live, fetchedAt }`; the host validates the payload and keeps
+   * the last good snapshot when a publish is malformed. Returns false when
+   * the payload was rejected (previous snapshot kept). Feature-detect on
+   * older hosts: `host.publishMonitorLive?.(...)`.
+   */
+  publishMonitorLive,
 
   // NOTE: every host door is async-safe — wrapped so a sync throw from an
   // internal helper (e.g. no desktop bridge in a plain browser) becomes a

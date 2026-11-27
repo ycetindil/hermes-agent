@@ -17,6 +17,7 @@ import {
   setSidebarAgentsGrouped,
   setSidebarGrouping
 } from '@/store/layout'
+import { clearMonitorLive, publishMonitorLive } from '@/store/monitor-live'
 import { $activeGatewayProfile, $profiles, setShowAllProfiles } from '@/store/profile'
 import { $projectScope, ALL_PROJECTS } from '@/store/project-scope'
 import { $projectTree } from '@/store/projects'
@@ -381,7 +382,7 @@ describe('ChatSidebar section labels', () => {
     expect(screen.queryByText('Sessions')).toBeNull()
   })
 
-  it('keeps the "Sessions" label when grouping is on but no projects exist', () => {
+  it('keeps the "Recent sessions" label when grouping is on but no projects exist', () => {
     // The source-filter toggle with an empty tree: the section lists plain
     // chat sessions, so heading it "Projects" mislabeled them (#62537).
     setSidebarAgentsGrouped(true)
@@ -390,11 +391,11 @@ describe('ChatSidebar section labels', () => {
 
     renderSidebar('/', 'chat')
 
-    expect(screen.getByText('Sessions')).toBeTruthy()
+    expect(screen.getByText('Recent sessions')).toBeTruthy()
     expect(screen.queryByText('Projects')).toBeNull()
   })
 
-  it('keeps the "Sessions" label when the grouped tree is only the synthetic Home bucket', () => {
+  it('keeps the "Recent sessions" label when the grouped tree is only the synthetic Home bucket', () => {
     // No real projects — every session fell into Home. A lone Home bucket is
     // the flat session list wearing a project costume, not a switcher.
     setSidebarAgentsGrouped(true)
@@ -403,7 +404,7 @@ describe('ChatSidebar section labels', () => {
 
     renderSidebar('/', 'chat')
 
-    expect(screen.getByText('Sessions')).toBeTruthy()
+    expect(screen.getByText('Recent sessions')).toBeTruthy()
     expect(screen.queryByText('Projects')).toBeNull()
   })
 })
@@ -588,5 +589,96 @@ describe('ChatSidebar messaging owners', () => {
     expect(telegramGroups()).toHaveLength(0)
     expect(screen.queryByText('work-1')).toBeNull()
     expect(within(row('default-1')).queryByRole('img', { name: /^Profile:/ })).toBeNull()
+  })
+})
+
+describe('ChatSidebar open-now section', () => {
+  beforeEach(() => {
+    $sessions.set(sessionRows)
+    $sessionsLoading.set(false)
+  })
+
+  afterEach(() => {
+    cleanup()
+    clearMonitorLive()
+    $sessions.set([])
+    $sessionsLoading.set(true)
+  })
+
+  const publishSnapshot = () => {
+    const now = Date.now() / 1000
+
+    expect(
+      publishMonitorLive({
+        profile: 'default',
+        live: {
+          now,
+          running: [
+            {
+              id: 'tile-one',
+              profile: 'default',
+              title: 'Tile one',
+              model: null,
+              state: 'working',
+              status: 'running',
+              subagent: false,
+              origin: 'desktop',
+              kind: 'hermes',
+              source_name: 'Hermes',
+              card_only: false,
+              kanban: null,
+              last: now
+            },
+            {
+              id: 't_c63fe524',
+              profile: 'musti',
+              title: 'Board card work',
+              model: null,
+              state: 'working',
+              status: 'running',
+              subagent: false,
+              origin: 'kanban',
+              kind: 'hermes',
+              source_name: 'Hermes',
+              card_only: true,
+              kanban: { id: 't_c63fe524', board: 'default', status: 'running', title: 'Board card work', block_kind: null },
+              last: now
+            }
+          ],
+          counts: { open: 2, working: 2, needs_approval: 0, your_turn: 0, stalled: 0, subagents: 0 }
+        },
+        fetchedAt: now
+      })
+    ).toBe(true)
+  }
+
+  it('renders the open-now section above Pinned from the published snapshot', () => {
+    publishSnapshot()
+
+    renderSidebar('/', 'chat')
+
+    expect(screen.getByText('Open now')).toBeTruthy()
+    expect(screen.getByText('Board card work')).toBeTruthy()
+    expect(screen.getByText('Board work · running')).toBeTruthy()
+    expect(screen.getByText("Showing the default profile's open work")).toBeTruthy()
+    expect(screen.getByText('Active in the last 10 minutes')).toBeTruthy()
+
+    const openNow = screen.getByText('Open now')
+    const pinned = screen.getByText('Pinned')
+    expect(openNow.compareDocumentPosition(pinned) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('labels the main list "Recent sessions" and keeps its rows', () => {
+    renderSidebar('/', 'chat')
+
+    expect(screen.getByText('Recent sessions')).toBeTruthy()
+    expect(screen.getByText('Tile one')).toBeTruthy()
+    expect(screen.getByText('Tile two')).toBeTruthy()
+  })
+
+  it('says the live list has not been shared yet when nothing is published', () => {
+    renderSidebar('/', 'chat')
+
+    expect(screen.getByText("The quota view hasn't shared its live list yet.")).toBeTruthy()
   })
 })

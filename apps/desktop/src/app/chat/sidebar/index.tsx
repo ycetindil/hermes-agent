@@ -157,6 +157,7 @@ import { SidebarCronJobsSection } from './cron-jobs-section'
 import { SidebarFilterMenu } from './filter-menu'
 import { buildGatewaySessionGroups, scopeGatewaySessionGroups, useGatewaySessionGroups } from './gateway-group-model'
 import { SidebarLoadMoreRow } from './load-more-row'
+import { OpenNowSection } from './open-now-section'
 import { orderByIds, reconcileOrderIds, resolveManualSessionOrderIds, sameIds } from './order'
 import { filterSessionsByProfileScope } from './profile-scope'
 import { ProfileRail } from './profile-switcher'
@@ -1253,10 +1254,10 @@ export function ChatSidebar({
   // The section header must name what the section is showing. Grouped mode
   // reads "Projects" only while there IS a project switcher to show: a real
   // project row, or a tree still resolving (the loading state keeps the label
-  // stable instead of flapping to "Sessions" and back). The synthetic Home
+  // stable instead of flapping to "Recent sessions" and back). The synthetic Home
   // bucket alone is just the flat session list wearing a project costume —
   // with no real projects the section lists plain chat sessions, so it keeps
-  // the "Sessions" label (#62537).
+  // the recents label (#62537).
   const hasProjectRows = projectModel.some(node => !node.isNoProject)
 
   const sessionsLabel =
@@ -1264,7 +1265,7 @@ export function ChatSidebar({
       ? enteredProject.label
       : worktreeGroupingActive && (hasProjectRows || projectTreeLoading)
         ? s.projects.sectionLabel
-        : s.sessions
+        : s.recents
 
   // Mirror the section's skeleton gate (projectsLoading + nothing to show yet):
   // while the skeleton is up there's no point also spinning the header count.
@@ -1750,6 +1751,8 @@ export function ChatSidebar({
                 showProfileTags={showAllProfiles}
               />
             )}
+
+            {!trimmedQuery && <OpenNowSection onResumeSession={onResumeSession} />}
 
             {!trimmedQuery && (
               <SidebarSessionsSection
