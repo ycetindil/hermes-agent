@@ -7,6 +7,7 @@ import {
   fromCI,
   fromFallback,
   fromLocalGit,
+  gitVersionInfo,
   isFallbackCommit,
   resolveStamp
 } from './write-build-stamp.mjs'
@@ -33,7 +34,11 @@ test('fromLocalGit reads HEAD + branch + dirty status', () => {
     commit: 'b'.repeat(40),
     branch: 'main',
     dirty: true,
-    source: 'local'
+    source: 'local',
+    // No tag or short commit resolves from the stubbed probes.
+    baseVersion: null,
+    distance: null,
+    displayVersion: null
   })
   assert.ok(calls.includes('git rev-parse HEAD'))
 })
@@ -139,3 +144,96 @@ test('commit builds retain exact provenance without entering an update channel',
   }
 })
 
+// ── gitVersionInfo — the real version at build time, by the CLI's rules ────
+
+function gitExec(responses) {
+  return (argv) => responses[argv.join(' ')] ?? null
+}
+
+test('fromLocalGit resolves the real version from merged release tags', () => {
+  const execFn = gitExec({
+    'git rev-parse HEAD': 'b'.repeat(40),
+    'git rev-parse --abbrev-ref HEAD': 'main',
+    'git status --porcelain -uno': ' M apps/desktop/package.json',
+    'git rev-parse --short=7 HEAD': 'babcdef',
+    'git tag --merged HEAD --list v[0-9]*': 'v0.23.3\nv0.23.4\n',
+    'git rev-list --count v0.23.4..HEAD': '12'
+  })
+  assert.deepEqual(fromLocalGit('/repo', execFn), {
+    commit: 'b'.repeat(40),
+    branch: 'main',
+    dirty: true,
+    source: 'local',
+    baseVersion: '0.23.4',
+    distance: 12,
+    displayVersion: '0.23.4+12.gbabcdef.dirty'
+  })
+})
+
+test('gitVersionInfo falls back to the nearest CalVer release pyproject version', () => {
+  const execFn = gitExec({
+    'git tag --merged HEAD --list v[0-9]*': '',
+    'git describe --tags --long --match v2[0-9][0-9][0-9].* HEAD': 'v2026.9.24-3-gabcdef0',
+    'git show v2026.9.24:pyproject.toml': '[project]\nname = "hermes"\nversion = "0.23.4"\n'
+  })
+  assert.deepEqual(gitVersionInfo('/repo', execFn, { shortCommit: 'abcdef0', dirty: false }), {
+    baseVersion: '0.23.4',
+    distance: 3,
+    displayVersion: '0.23.4+3.gabcdef0'
+  })
+})
+
+test('gitVersionInfo keeps a tagless checkout honest as git.<short>', () => {
+  const execFn = gitExec({
+    'git tag --merged HEAD --list v[0-9]*': '',
+    'git describe --tags --long --match v2[0-9][0-9][0-9].* HEAD': null
+  })
+  assert.deepEqual(gitVersionInfo('/repo', execFn, { shortCommit: 'abcdef0', dirty: false }), {
+    baseVersion: null,
+    distance: null,
+    displayVersion: 'git.abcdef0'
+  })
+  assert.deepEqual(gitVersionInfo('/repo', execFn, { shortCommit: 'abcdef0', dirty: true }), {
+    baseVersion: null,
+    distance: null,
+    displayVersion: 'git.abcdef0.dirty'
+  })
+})
+
+test('gitVersionInfo degrades to nulls when git probes fail', () => {
+  assert.deepEqual(gitVersionInfo('/repo', () => null, { shortCommit: null, dirty: false }), {
+    baseVersion: null,
+    distance: null,
+    displayVersion: null
+  })
+})
+
+test('buildStampPayload stamps the git-derived version on a local build', () => {
+  const stamp = {
+    ...baseStamp,
+    source: 'local',
+    baseVersion: '0.23.4',
+    distance: 12,
+    displayVersion: '0.23.4+12.gabcdef0'
+  }
+  const payload = buildStampPayload(stamp, {})
+  assert.equal(payload.baseVersion, '0.23.4')
+  assert.equal(payload.displayVersion, '0.23.4+12.gabcdef0')
+  assert.equal(payload.distance, 12)
+})
+
+test('buildStampPayload keeps the explicit payload version over git-derived fields', () => {
+  const stamp = {
+    ...baseStamp,
+    source: 'local',
+    baseVersion: '0.23.4',
+    distance: 12,
+    displayVersion: '0.23.4+12.gabcdef0'
+  }
+  const byVersion = buildStampPayload(stamp, { HERMES_PAYLOAD_VERSION: '0.23.4' })
+  assert.equal(byVersion.baseVersion, '0.23.4')
+  assert.equal(byVersion.displayVersion, '0.23.4')
+  const byTag = buildStampPayload(stamp, { HERMES_PAYLOAD_TAG: 'v0.23.5' })
+  assert.equal(byTag.baseVersion, '0.23.5')
+  assert.equal(byTag.displayVersion, '0.23.5')
+})

@@ -9,7 +9,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { resolve, join, relative, posix } from "path"
 import productIdentity from "../product-identity.cjs"
-import { channelBuildRequest, releaseVersion } from "../../../scripts/msix-shared.mjs"
+import { channelBuildRequest, releaseVersion, STABLE_TAG_RE } from "../../../scripts/msix-shared.mjs"
 import { validateBundleEnvironment } from "./bundle-env.mjs"
 import { execFileSync } from "child_process"
 
@@ -46,6 +46,87 @@ export function fromCI(env = process.env) {
   }
 }
 
+/** Compare two `major.minor.patch` cores numerically, like Python's tuple max. */
+function compareVersionCore(a, b) {
+  const pa = a.split(".").map(Number)
+  const pb = b.split(".").map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+function parseNonNegative(value) {
+  if (value === null || value === undefined) return null
+  const parsed = Number.parseInt(String(value).trim(), 10)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+/** Mirror of the CLI's `_derived_version`: `<base>+<distance>` past a release. */
+function derivedVersion(baseVersion, distance, dirty, shortCommit) {
+  if (distance && distance > 0) {
+    const suffix = shortCommit ? `${distance}.g${shortCommit}` : String(distance)
+    return `${baseVersion}+${suffix}${dirty && shortCommit ? ".dirty" : ""}`
+  }
+  if (dirty && distance === null) return `${baseVersion}+?`
+  return baseVersion
+}
+
+/** The `[project]` version of a pyproject.toml, or null when it has none. */
+function pyprojectVersion(text) {
+  if (!text) return null
+  const project = text.split(/^\[project\]/m)[1]
+  if (!project) return null
+  const match = /^\s*version\s*=\s*"([^"]+)"/m.exec(project.split(/^\[/m)[0])
+  return match ? match[1] : null
+}
+
+/**
+ * Resolve baseVersion / distance / displayVersion from local git, by the same
+ * rules the CLI uses (hermes_cli/version_info.py _git_version_info): the
+ * highest merged stable tag, else the nearest CalVer release's pyproject
+ * version, else the bare `git.<short>` identity. Never throws: a git probe
+ * that fails degrades to nulls, and the stamp stays honest about that.
+ */
+export function gitVersionInfo(repoRoot = REPO_ROOT, execFn = tryExec, { shortCommit = null, dirty = false } = {}) {
+  const tags = execFn(["git", "tag", "--merged", "HEAD", "--list", "v[0-9]*"], { cwd: repoRoot })
+  const releases = (tags || "")
+    .split("\n")
+    .map((tag) => tag.trim())
+    .filter((tag) => STABLE_TAG_RE.test(tag))
+    .map((tag) => tag.slice(1))
+  let baseVersion = null
+  let distance = null
+  if (releases.length > 0) {
+    baseVersion = releases.reduce((best, next) => (compareVersionCore(next, best) > 0 ? next : best))
+    distance = parseNonNegative(execFn(["git", "rev-list", "--count", `v${baseVersion}..HEAD`], { cwd: repoRoot }))
+  } else {
+    // Releases before semver tags existed are tagged vYYYY.M.D only; the
+    // version users actually run is in that tag's pyproject.
+    const described = execFn(["git", "describe", "--tags", "--long", "--match", "v2[0-9][0-9][0-9].*", "HEAD"], { cwd: repoRoot })
+    if (described) {
+      const parts = described.split("-")
+      parts.pop() // short commit
+      const count = parts.pop()
+      const tag = parts.join("-")
+      const version = pyprojectVersion(execFn(["git", "show", `${tag}:pyproject.toml`], { cwd: repoRoot }))
+      if (version && STABLE_TAG_RE.test(`v${version}`)) {
+        baseVersion = version
+        distance = parseNonNegative(count)
+      }
+    }
+  }
+  if (baseVersion === null) {
+    return {
+      baseVersion: null,
+      distance: null,
+      displayVersion: shortCommit ? `git.${shortCommit}${dirty ? ".dirty" : ""}` : null
+    }
+  }
+  return { baseVersion, distance, displayVersion: derivedVersion(baseVersion, distance, dirty, shortCommit) }
+}
+
 export function fromLocalGit(repoRoot = REPO_ROOT, execFn = tryExec) {
   const sha = execFn(["git", "rev-parse", "HEAD"], { cwd: repoRoot })
   if (!sha) return null
@@ -58,11 +139,16 @@ export function fromLocalGit(repoRoot = REPO_ROOT, execFn = tryExec) {
   // differs from the commit being pinned.
   const status = execFn(["git", "status", "--porcelain", "-uno"], { cwd: repoRoot })
   const dirty = status !== null && status.length > 0
+  const shortCommit = execFn(["git", "rev-parse", "--short=7", "HEAD"], { cwd: repoRoot })
   return {
     commit: sha,
     branch: branch === "HEAD" ? null : branch, // detached HEAD -> null
     dirty: dirty,
-    source: "local"
+    source: "local",
+    // The real version at build time, resolved from local git by the CLI's
+    // rules — a local build must not stamp nulls and leave the footer to
+    // guess from whatever runtime happens to be installed.
+    ...gitVersionInfo(repoRoot, execFn, { shortCommit, dirty })
   }
 }
 
@@ -94,7 +180,7 @@ export function resolveStamp({
   if (channelBuild) {
     const local = fromLocalGit(repoRoot, execFn)
     if (!local || local.commit !== channelBuild.commit || local.dirty) throw new Error('Channel build identity does not match clean checkout HEAD')
-    return { ...local, branch: null, source: 'channel-build', baseVersion: channelBuild.sourceVersion, channelBuild }
+    return { ...local, branch: null, source: 'channel-build', baseVersion: channelBuild.sourceVersion, distance: null, displayVersion: null, channelBuild }
   }
   if (env.HERMES_BUILD_COMMIT) {
     if (!/^[a-f0-9]{40}$/.test(env.HERMES_BUILD_COMMIT) || env.HERMES_PAYLOAD_TAG) {
@@ -232,10 +318,13 @@ export function buildStampPayload(stamp, env = process.env, platform = process.p
     dirty: stamp.dirty,
     source: channelBuild ? 'channel-build' : commitBuild ? 'commit-build' : stamp.source,
     commitDate: stamp.commitDate ?? null,
-    baseVersion: channelBuild?.sourceVersion ?? stamp.baseVersion ?? version?.split('-')[0] ?? null,
+    // An explicit payload version is the release authority and wins over the
+    // git-derived stamp fields; the git resolution is the fallback that keeps
+    // local builds from stamping nulls.
+    baseVersion: channelBuild?.sourceVersion ?? version?.split('-')[0] ?? stamp.baseVersion ?? null,
     displayVersion: channelBuild
       ? `${channelBuild.sourceVersion} (${channelBuild.channel} #${channelBuild.sequence}, ${channelBuild.commit.slice(0, 7)})`
-      : stamp.displayVersion ?? version,
+      : version ?? stamp.displayVersion,
     distance: stamp.distance ?? null
   }
 

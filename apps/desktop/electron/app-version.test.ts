@@ -95,6 +95,20 @@ describe('artifact version identity', (): void => {
     expect(appVersionInfo(stamp, '0.21.5+6644.gb412ee9', '0.0.0').appVersion).toBe('0.21.5+6644.gb412ee9')
   })
 
+  // Quota-view item 9: the stamp is the desktop build's own version, so the
+  // footer reads it — never the bootstrapped runtime's older release.
+  it('reads a stamped bootstrap version over a stale runtime probe', (): void => {
+    const stamp: InstallStamp = {
+      payload: 'bootstrap',
+      displayVersion: '0.23.4+12.gabcdef0',
+      baseVersion: '0.23.4',
+      source: 'local',
+      updateMechanism: 'self'
+    } as InstallStamp
+
+    expect(appVersionInfo(stamp, '0.23.3+5.g1234567', '0.0.0').appVersion).toBe('0.23.4+12.gabcdef0')
+  })
+
   // #124581: the desktop package.json carries a 0.0.0 placeholder, so the
   // About panel must never repeat it as the running version.
   it('skips the 0.0.0 package placeholder for builds without a baked display version', (): void => {

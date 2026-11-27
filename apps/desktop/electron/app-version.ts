@@ -88,11 +88,16 @@ export function appVersionInfo(
 
   const build = stamp.channelBuild
 
+  // The stamp is the desktop build's own version and the footer's single
+  // source: a bootstrap artifact's runtime probe names the bootstrapped
+  // checkout, which may sit on an older release than the build itself.
+  // The probe stays as the fallback rung for stamps without a version
+  // (legacy / non-git builds), never as a silent replacement for one.
   return {
     appVersion: build
       ? `${build.sourceVersion} (${build.channel} #${build.sequence}, ${build.commit.slice(0, 8)})`
       : stamp.payload === 'bootstrap'
-        ? firstRealVersion([runtimeVersion, stamp.displayVersion, stamp.baseVersion, packageVersion])
+        ? firstRealVersion([stamp.displayVersion, stamp.baseVersion, runtimeVersion, packageVersion])
         : firstRealVersion([stamp.displayVersion, stamp.baseVersion, packageVersion, runtimeVersion]),
     baseVersion: build?.sourceVersion ?? stamp.baseVersion ?? undefined,
     sequence: build?.sequence,
